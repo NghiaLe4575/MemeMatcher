@@ -32,8 +32,7 @@ STEP 4: BUILD SBERT EMBEDDINGS
 - Load pretrained model:
   sentence-transformers/all-MiniLM-L6-v2
 - For each meme:
-  - Join context_description into one string
-  - Encode to vector
+  - Encode usage_text and visual_description into vectors separately
 - Save embeddings with meme_id mapping
 
 OUTPUT

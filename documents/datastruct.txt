@@ -53,8 +53,6 @@ visual_description
 - Describes ONLY what is visible in the image
 - No interpretation
 - No usage meaning
-- No meme name
-
 usage_text
 - Natural language description of how people use the meme
 - No bullet points

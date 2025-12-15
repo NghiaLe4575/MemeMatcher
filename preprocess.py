@@ -47,8 +47,8 @@ def main():
     # (We drop rows where 'about' or descriptions are missing to ensure high quality)
     df_clean = df.dropna(subset=['about', 'description', 'caption_style_explanation', 'template_url', 'template_title'])
     
-    # 2. Sort by popularity and take top 100
-    df_clean = df_clean.sort_values(by='total_views', ascending=False).head(100)
+    # 2. Sort by popularity and take top n
+    df_clean = df_clean.sort_values(by='total_views', ascending=False).head(300)
     print(f"Selected top {len(df_clean)} high-quality memes.")
 
     # Prepare output directory
@@ -58,15 +58,23 @@ def main():
     memes_list = []
     
     print("Processing and downloading images...")
+    seen_meme_ids = set()
+
     for idx, row in df_clean.iterrows():
         meme_id = to_snake_case(row['template_title'])
+
+        # Skip duplicate meme IDs
+        if meme_id in seen_meme_ids:
+            continue
+        seen_meme_ids.add(meme_id)
+
         image_filename = f"{meme_id}.jpg"
         image_path_rel = f"{IMAGE_DIR}/{image_filename}"
-        
+
         # Data Transformation
         visual_desc = get_first_k_sentences(row['description'], 2)
         usage_txt = row['about'].replace('\n', ' ').strip()
-        
+
         meme_obj = {
             "meme_id": meme_id,
             "name": row['template_title'],
@@ -76,10 +84,11 @@ def main():
                 "usage_text": usage_txt,
             }
         }
-        memes_list.append(meme_obj)
-        
+
         # Download Image
-        download_image(row['template_url'], image_path_rel)
+        if download_image(row['template_url'], image_path_rel):
+            memes_list.append(meme_obj)
+
         
     # Save JSON
     with open(OUTPUT_JSON, 'w') as f:

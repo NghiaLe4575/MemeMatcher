@@ -1,0 +1,42 @@
+[
+  {
+    "rank": 1,
+    "meme_id": "awkward_moment_sealion",
+    "score": 1.0,
+    "winner_field": "usage",
+    "original_image": "data/images/awkward_moment_sealion.jpg",
+    "exported_image": "01.jpg"
+  },
+  {
+    "rank": 2,
+    "meme_id": "socially_awkward_awesome_penguin",
+    "score": 0.7935981280305732,
+    "winner_field": "usage",
+    "original_image": "data/images/socially_awkward_awesome_penguin.jpg",
+    "exported_image": "02.jpg"
+  },
+  {
+    "rank": 3,
+    "meme_id": "socially_awkward_penguin",
+    "score": 0.7307490945316175,
+    "winner_field": "usage",
+    "original_image": "data/images/socially_awkward_penguin.jpg",
+    "exported_image": "03.jpg"
+  },
+  {
+    "rank": 4,
+    "meme_id": "socially_awesome_awkward_penguin",
+    "score": 0.7059609523302895,
+    "winner_field": "usage",
+    "original_image": "data/images/socially_awesome_awkward_penguin.jpg",
+    "exported_image": "04.jpg"
+  },
+  {
+    "rank": 5,
+    "meme_id": "alright_gentlemen_we_need_a_new_idea",
+    "score": 0.5677106892592971,
+    "winner_field": "usage",
+    "original_image": "data/images/alright_gentlemen_we_need_a_new_idea.jpg",
+    "exported_image": "05.jpg"
+  }
+]

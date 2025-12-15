@@ -1,0 +1,42 @@
+[
+  {
+    "rank": 1,
+    "meme_id": "third_world_success_kid",
+    "score": 1.0,
+    "winner_field": null,
+    "original_image": "data/images/third_world_success_kid.jpg",
+    "exported_image": "01.jpg"
+  },
+  {
+    "rank": 2,
+    "meme_id": "first_day_on_the_internet_kid",
+    "score": 0.4046050058770325,
+    "winner_field": null,
+    "original_image": "data/images/first_day_on_the_internet_kid.jpg",
+    "exported_image": "02.jpg"
+  },
+  {
+    "rank": 3,
+    "meme_id": "success_kid",
+    "score": 0.38004148880306005,
+    "winner_field": null,
+    "original_image": "data/images/success_kid.jpg",
+    "exported_image": "03.jpg"
+  },
+  {
+    "rank": 4,
+    "meme_id": "nailed_it",
+    "score": 0.17034605343556702,
+    "winner_field": null,
+    "original_image": "data/images/nailed_it.jpg",
+    "exported_image": "04.jpg"
+  },
+  {
+    "rank": 5,
+    "meme_id": "unhelpful_high_school_teacher",
+    "score": 0.06978159135792233,
+    "winner_field": null,
+    "original_image": "data/images/unhelpful_high_school_teacher.jpg",
+    "exported_image": "05.jpg"
+  }
+]

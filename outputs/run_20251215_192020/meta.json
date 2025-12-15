@@ -1,0 +1,42 @@
+[
+  {
+    "rank": 1,
+    "meme_id": "third_world_success_kid",
+    "score": 1.0,
+    "winner_field": "usage",
+    "original_image": "data/images/third_world_success_kid.jpg",
+    "exported_image": "01.jpg"
+  },
+  {
+    "rank": 2,
+    "meme_id": "success_kid",
+    "score": 0.6798356188065717,
+    "winner_field": "usage",
+    "original_image": "data/images/success_kid.jpg",
+    "exported_image": "02.jpg"
+  },
+  {
+    "rank": 3,
+    "meme_id": "first_day_on_the_internet_kid",
+    "score": 0.4029044679555787,
+    "winner_field": "usage",
+    "original_image": "data/images/first_day_on_the_internet_kid.jpg",
+    "exported_image": "03.jpg"
+  },
+  {
+    "rank": 4,
+    "meme_id": "annoying_childhood_friend",
+    "score": 0.38075327170164747,
+    "winner_field": "visual",
+    "original_image": "data/images/annoying_childhood_friend.jpg",
+    "exported_image": "04.jpg"
+  },
+  {
+    "rank": 5,
+    "meme_id": "chubby_bubbles_girl",
+    "score": 0.35974914030160954,
+    "winner_field": "visual",
+    "original_image": "data/images/chubby_bubbles_girl.jpg",
+    "exported_image": "05.jpg"
+  }
+]
