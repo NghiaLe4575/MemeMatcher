@@ -1,0 +1,62 @@
+PURPOSE
+-------
+Define the minimal structure for a text-based
+meme Information Retrieval system.
+
+DESIGN PHILOSOPHY
+-----------------
+- Natural language only
+- No intent engineering
+- No semantic leakage
+- Retrieval quality must come from IR models, not labels
+
+PRIMARY FILE
+------------
+File path: data/memes.json
+Format: JSON array
+Each object represents ONE meme template.
+
+---------------
+
+{
+  "meme_id": STRING,
+  "name": STRING,
+  "image_paths": ARRAY[STRING],
+
+  "text": {
+    "visual_description": STRING,
+    "usage_text": STRING,
+  }
+}
+
+FIELD DEFINITIONS
+-----------------
+
+meme_id
+- lowercase
+- snake_case
+- stable identifier
+- used as primary key everywhere
+
+name
+- Human-readable meme name
+- Used ONLY for display
+- MUST NOT appear inside text fields
+
+image_paths
+- Relative paths to image files
+- At least one image required
+- No URLs at runtime
+
+visual_description
+- 1–2 sentences
+- Describes ONLY what is visible in the image
+- No interpretation
+- No usage meaning
+- No meme name
+
+usage_text
+- Natural language description of how people use the meme
+- No bullet points
+- No taxonomy
+- No explicit emotion labeling

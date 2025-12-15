@@ -1,0 +1,55 @@
+RUNTIME PROCESS
+
+INPUT
+-----
+User query (string)
+
+STEP 1: QUERY NORMALIZATION
+--------------------------
+- Lowercase
+- Strip punctuation
+- Preserve word order
+
+STEP 2: LEXICAL RETRIEVAL (BM25)
+--------------------------------
+- Retrieve top 20 memes
+- Output:
+  { meme_id, bm25_score }
+
+STEP 3: SEMANTIC RETRIEVAL (SBERT)
+----------------------------------
+- Encode query with same SBERT model
+- Cosine similarity against all meme embeddings
+- Retrieve top 20
+- Output:
+  { meme_id, sbert_score }
+
+STEP 4: SCORE NORMALIZATION
+---------------------------
+- Normalize BM25 scores to [0,1]
+- Normalize SBERT scores to [0,1]
+
+STEP 5: SCORE FUSION
+-------------------
+final_score = 0.4 * bm25 + 0.6 * sbert
+
+RATIONALE:
+- Context dominates meme recall
+- Lexical still helps explicit queries
+
+STEP 6: FINAL RANKING
+--------------------
+- Merge by meme_id
+- Sort by final_score descending
+- Select top K (default K=5)
+
+STEP 7: OUTPUT FORMAT
+--------------------
+For each result:
+{
+  "meme_id",
+  "name",
+  "image_path",
+  "final_score",
+  "matched_context_snippet"
+}

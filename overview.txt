@@ -1,0 +1,45 @@
+GOAL
+----
+Implement a text-based Information Retrieval system for meme search.
+The system retrieves memes based on:
+1) Literal textual recall (BM25)
+2) Contextual / semantic intent (Sentence-BERT)
+
+NO MODEL TRAINING.
+ONLY indexing, retrieval, fusion, and evaluation.
+
+INPUT
+-----
+User textual query (free-form natural language)
+
+OUTPUT
+------
+Top-K memes ranked by relevance, each with:
+- meme_id
+- meme_name
+- image_path
+- matched_text (for explainability)
+- final_score
+
+COMPONENTS
+----------
+1) Data Loader
+2) Lexical Indexer (BM25)
+3) Semantic Indexer (SBERT)
+4) Query Processor
+5) Score Fusion
+6) Evaluation Module
+
+CONSTRAINTS
+-----------
+- Dataset size: ~100 memes
+- All retrieval is text-based
+- Models must be pretrained
+- System must support ablation:
+  BM25 only / SBERT only / Hybrid
+
+DELIVERABLES
+------------
+- Working retrieval demo
+- Offline evaluation metrics
+- Clear component separation

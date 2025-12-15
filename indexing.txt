@@ -1,0 +1,45 @@
+OFFLINE PROCESS — RUN ONCE
+
+STEP 1: LOAD DATA
+-----------------
+- Load memes.json
+- Validate schema strictly
+- Reject entries with:
+  - empty context_description
+  - missing image_paths
+  - duplicate meme_id
+
+STEP 2: BUILD BM25 CORPUS
+------------------------
+For each meme:
+- Concatenate fields:
+  visual_description
+  caption_pattern
+  context_description (flattened)
+- Lowercase
+- Remove punctuation
+- Store as bm25_corpus.json
+
+STEP 3: BUILD BM25 INDEX
+-----------------------
+- Tokenize by whitespace
+- No stemming
+- No stopword removal (baseline purity)
+- Save BM25 object to disk
+
+STEP 4: BUILD SBERT EMBEDDINGS
+-----------------------------
+- Load pretrained model:
+  sentence-transformers/all-MiniLM-L6-v2
+- For each meme:
+  - Join context_description into one string
+  - Encode to vector
+- Save embeddings with meme_id mapping
+
+OUTPUT
+------
+- bm25_index.pkl
+- sbert_embeddings.json
+
+NO TRAINING.
+NO UPDATES AT QUERY TIME.
