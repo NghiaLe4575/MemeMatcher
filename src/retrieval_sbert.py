@@ -1,14 +1,10 @@
 import json
 import numpy as np
-from sentence_transformers import SentenceTransformer
-
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 def cosine(a, b):
     return float(np.dot(a, b))
 
-def search(query, emb_path):
-    model = SentenceTransformer(MODEL_NAME)
+def search(query, emb_path, model):
 
     q = model.encode(query, normalize_embeddings=True)
 

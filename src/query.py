@@ -9,6 +9,7 @@ from src.retrieval_bm25 import search as bm25_search
 from src.retrieval_sbert import search as sbert_search
 from src.fusion import normalize, fuse
 from src.export_images import export
+from sentence_transformers import SentenceTransformer
 
 # =========================
 # CONFIG
@@ -25,13 +26,17 @@ TOP_K = 5
 
 EXPORT_IMAGES = True
 OUTPUT_ROOT = "outputs"
+
+
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # =========================
 
 
 def main():
-    # Load data
+    # Load data and model
     memes = load_memes(DATA_PATH)
     memes_by_id = {m["meme_id"]: m for m in memes}
+    model = SentenceTransformer(MODEL_NAME)
 
     # Normalize query (BM25 only)
     q_norm = normalize_text(QUERY_TEXT)
@@ -48,7 +53,7 @@ def main():
         })
 
     if MODE in ("sbert", "hybrid"):
-        sbert_raw = sbert_search(QUERY_TEXT, SBERT_EMB_PATH)
+        sbert_raw = sbert_search(QUERY_TEXT, SBERT_EMB_PATH, model)
         sbert_by_id = {r["meme_id"]: r for r in sbert_raw}
         sbert_scores = normalize({
             r["meme_id"]: r["score"] for r in sbert_raw
