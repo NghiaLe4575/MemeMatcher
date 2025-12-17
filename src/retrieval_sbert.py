@@ -4,12 +4,9 @@ import numpy as np
 def cosine(a, b):
     return float(np.dot(a, b))
 
-def search(query, emb_path, model):
+def search(query, emb_path, model, emb):
 
     q = model.encode(query, normalize_embeddings=True)
-
-    with open(emb_path, "r", encoding="utf-8") as f:
-        emb = json.load(f)
 
     results = []
 

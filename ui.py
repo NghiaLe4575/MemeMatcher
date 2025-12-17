@@ -1,6 +1,8 @@
 import streamlit as st
 import os
 from datetime import datetime
+import pickle
+import json
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -10,6 +12,7 @@ from src.retrieval_bm25 import search as bm25_search
 from src.retrieval_sbert import search as sbert_search
 from src.fusion import normalize, fuse
 from src.export_images import export
+from sentence_transformers import SentenceTransformer
 
 # =========================
 # CONFIG
@@ -19,7 +22,7 @@ ARTIFACTS_DIR = "artifacts"
 BM25_INDEX_PATH = f"{ARTIFACTS_DIR}/bm25_index.pkl"
 SBERT_EMB_PATH = f"{ARTIFACTS_DIR}/sbert_embeddings.json"
 OUTPUT_ROOT = "outputs"
-
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # =========================
 # PAGE CONFIG
 # =========================
@@ -145,6 +148,27 @@ def load_data():
     memes_by_id = {m["meme_id"]: m for m in memes}
     return memes, memes_by_id
 
+@st.cache_resource
+def get_sbert_model():
+    return SentenceTransformer(MODEL_NAME)
+
+@st.cache_resource
+def load_bm25_index(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+    
+
+@st.cache_data
+def load_sbert_embeddings(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+# Force-load at app startup (first render)
+model = get_sbert_model()
+memes, memes_by_id = load_data()
+bm25_index = load_bm25_index(BM25_INDEX_PATH)
+sbert_embeddings = load_sbert_embeddings(SBERT_EMB_PATH)
+
 # =========================
 # SIDEBAR - CONFIGURATION
 # =========================
@@ -254,8 +278,6 @@ if search_button:
         st.warning("⚠️ Please enter a search query")
     else:
         try:
-            # Load data
-            memes, memes_by_id = load_data()
             
             # Loading spinner with mode-specific message
             spinner_messages = {
@@ -274,13 +296,13 @@ if search_button:
                 
                 # Retrieval
                 if mode_lower in ("bm25", "hybrid"):
-                    bm25_raw = bm25_search(q_norm, BM25_INDEX_PATH)
+                    bm25_raw = bm25_search(q_norm, BM25_INDEX_PATH, bm25_index)
                     bm25_scores = normalize({
                         r["meme_id"]: r["score"] for r in bm25_raw
                     })
                 
                 if mode_lower in ("sbert", "hybrid"):
-                    sbert_raw = sbert_search(query_text, SBERT_EMB_PATH)
+                    sbert_raw = sbert_search(query_text, SBERT_EMB_PATH, model, sbert_embeddings)
                     sbert_by_id = {r["meme_id"]: r for r in sbert_raw}
                     sbert_scores = normalize({
                         r["meme_id"]: r["score"] for r in sbert_raw

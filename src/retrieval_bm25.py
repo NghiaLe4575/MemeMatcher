@@ -1,10 +1,8 @@
 import pickle
 import numpy as np
 
-def search(query, index_path, top_n=20):
-    with open(index_path, "rb") as f:
-        data = pickle.load(f)
-
+def search(query, index_path, data, top_n=20):
+    
     bm25 = data["bm25"]
     meme_ids = data["meme_ids"]
 

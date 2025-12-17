@@ -1,6 +1,8 @@
 import os
 from datetime import datetime
 import warnings
+import pickle
+import json
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 from src.data_loader import load_memes
@@ -21,8 +23,8 @@ BM25_INDEX_PATH = f"{ARTIFACTS_DIR}/bm25_index.pkl"
 SBERT_EMB_PATH = f"{ARTIFACTS_DIR}/sbert_embeddings.json"
 
 QUERY_TEXT = "third world success kid"
-MODE = "sbert" # bm25 | sbert | hybrid
-TOP_K = 5
+MODE = "hybrid" # bm25 | sbert | hybrid
+TOP_K = 20
 
 EXPORT_IMAGES = True
 OUTPUT_ROOT = "outputs"
@@ -37,6 +39,12 @@ def main():
     memes = load_memes(DATA_PATH)
     memes_by_id = {m["meme_id"]: m for m in memes}
     model = SentenceTransformer(MODEL_NAME)
+    with open(BM25_INDEX_PATH, "rb") as f:
+        bm25_index= pickle.load(f)
+    with open(SBERT_EMB_PATH, "r", encoding="utf-8") as f:
+        sbert_embeddings = json.load(f)
+        
+    print("Data and model loaded successfully")
 
     # Normalize query (BM25 only)
     q_norm = normalize_text(QUERY_TEXT)
@@ -47,13 +55,13 @@ def main():
 
     # --- Retrieval ---
     if MODE in ("bm25", "hybrid"):
-        bm25_raw = bm25_search(q_norm, BM25_INDEX_PATH)
+        bm25_raw = bm25_search(q_norm, BM25_INDEX_PATH, bm25_index)
         bm25_scores = normalize({
             r["meme_id"]: r["score"] for r in bm25_raw
         })
 
     if MODE in ("sbert", "hybrid"):
-        sbert_raw = sbert_search(QUERY_TEXT, SBERT_EMB_PATH, model)
+        sbert_raw = sbert_search(QUERY_TEXT, SBERT_EMB_PATH, model, sbert_embeddings)
         sbert_by_id = {r["meme_id"]: r for r in sbert_raw}
         sbert_scores = normalize({
             r["meme_id"]: r["score"] for r in sbert_raw
