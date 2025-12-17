@@ -1,28 +1,38 @@
 import streamlit as st
 import os
-from datetime import datetime
 import pickle
 import json
 import warnings
+import html
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+import faiss
+from sentence_transformers import SentenceTransformer
 
 from src.data_loader import load_memes
 from src.normalize import normalize_text
 from src.retrieval_bm25 import search as bm25_search
-from src.retrieval_sbert import search as sbert_search
+from src.retrieval_sbert import search_faiss_sbert
 from src.fusion import normalize, fuse
 from src.export_images import export
-from sentence_transformers import SentenceTransformer
+import html
 
 # =========================
 # CONFIG
 # =========================
 DATA_PATH = "data/memes.json"
 ARTIFACTS_DIR = "artifacts"
+
 BM25_INDEX_PATH = f"{ARTIFACTS_DIR}/bm25_index.pkl"
-SBERT_EMB_PATH = f"{ARTIFACTS_DIR}/sbert_embeddings.json"
+
+SBERT_USAGE_INDEX_PATH  = f"{ARTIFACTS_DIR}/sbert_usage.index"
+SBERT_VISUAL_INDEX_PATH = f"{ARTIFACTS_DIR}/sbert_visual.index"
+SBERT_MEME_IDS_PATH     = f"{ARTIFACTS_DIR}/sbert_meme_ids.json"
+
 OUTPUT_ROOT = "outputs"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+# =========================
+
 # =========================
 # PAGE CONFIG
 # =========================
@@ -106,7 +116,6 @@ st.markdown("""
         }
         .badge-usage { background-color: #9AA7B8; color: #132338; }
         .badge-visual { background-color: #E2D2B3; color: #475C78; }
-        .badge-field { background-color: #FFA600; color: #132338; }
 
         /* Context/usage text styling */
         .usage-context {
@@ -139,11 +148,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# LOAD DATA (CACHED)
+# LOAD DATA / MODELS / INDICES (CACHED, LOADED ONCE)
 # =========================
 @st.cache_data
 def load_data():
-    """Load memes data and create lookup dictionary"""
     memes = load_memes(DATA_PATH)
     memes_by_id = {m["meme_id"]: m for m in memes}
     return memes, memes_by_id
@@ -153,21 +161,53 @@ def get_sbert_model():
     return SentenceTransformer(MODEL_NAME)
 
 @st.cache_resource
-def load_bm25_index(path):
-    with open(path, "rb") as f:
+def load_bm25_index():
+    with open(BM25_INDEX_PATH, "rb") as f:
         return pickle.load(f)
-    
 
-@st.cache_data
-def load_sbert_embeddings(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+@st.cache_resource
+def load_faiss_indices():
+    idx_usage = faiss.read_index(SBERT_USAGE_INDEX_PATH)
+    idx_visual = faiss.read_index(SBERT_VISUAL_INDEX_PATH)
+    with open(SBERT_MEME_IDS_PATH, "r", encoding="utf-8") as f:
+        meme_ids = json.load(f)
+    return idx_usage, idx_visual, meme_ids
 
 # Force-load at app startup (first render)
 model = get_sbert_model()
 memes, memes_by_id = load_data()
-bm25_index = load_bm25_index(BM25_INDEX_PATH)
-sbert_embeddings = load_sbert_embeddings(SBERT_EMB_PATH)
+bm25_index = load_bm25_index()
+index_usage, index_visual, sbert_meme_ids = load_faiss_indices()
+
+# Global search state and variables
+if "do_search" not in st.session_state:
+    st.session_state.do_search = False
+    
+def do_search():
+    if st.session_state.get("query_text", "").strip():
+        st.session_state.do_search = True
+        
+if "w_bm25" not in st.session_state:
+    st.session_state.w_bm25 = 0.4
+if "w_sbert" not in st.session_state:
+    st.session_state.w_sbert = 0.6
+    
+if "last_topk" not in st.session_state:
+    st.session_state.last_topk = []
+if "last_query" not in st.session_state:
+    st.session_state.last_query = ""
+if "has_results" not in st.session_state:
+    st.session_state.has_results = False
+
+    
+# =========================
+# Helper
+# =========================
+@st.dialog("Detail")
+def show_full_usage(title: str, text: str):
+    st.markdown(f"**{title}**")
+    st.write(text)
+
 
 # =========================
 # SIDEBAR - CONFIGURATION
@@ -175,241 +215,238 @@ sbert_embeddings = load_sbert_embeddings(SBERT_EMB_PATH)
 with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     st.markdown("---")
-    
-    # Mode Selection
+
     st.markdown("**Retrieval Mode**")
     mode = st.radio(
         "Select search algorithm",
         ["BM25", "SBERT", "Hybrid"],
-        help="BM25: Keyword-based | SBERT: Semantic | Hybrid: Combined"
+        help="BM25: Keyword-based | SBERT: Semantic | Hybrid: Combined",
+        label_visibility="collapsed",
+        on_change=do_search
     )
     mode_lower = mode.lower()
-    
+
     st.markdown("---")
-    
-    # Top-K Selection
+
     top_k = st.slider(
         "Number of Results",
         min_value=1,
         max_value=20,
         value=5,
-        help="How many memes to retrieve"
+        on_change=do_search
     )
-    
-    # Fusion Weights (only for Hybrid mode)
-    if mode == "Hybrid":
-        st.markdown("---")
-        st.markdown("**Fusion Weights**")
-        w_bm25 = st.slider(
-            "BM25 Weight",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.4,
-            step=0.1,
-            help="Weight for keyword matching"
-        )
-        w_sbert = st.slider(
-            "SBERT Weight",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.6,
-            step=0.1,
-            help="Weight for semantic matching"
-        )
+
+    st.markdown("---")
+    st.markdown("**Fusion Weights**")
+    # ALWAYS render sliders so state persists; just disable unless Hybrid
+    is_hybrid = (mode == "Hybrid")
+    w_bm25 = st.slider(
+        "BM25 Weight",
+        0.0, 1.0, 1.0 - st.session_state.w_sbert,
+        step=0.05,
+        key="w_bm25",
+        on_change=do_search,
+        disabled=not is_hybrid
+    )
+
+    w_sbert = st.slider(
+        "SBERT Weight",
+        0.0, 1.0, 1.0 - st.session_state.w_bm25,
+        step=0.05,
+        key="w_sbert",
+        on_change=do_search,
+        disabled=not is_hybrid
+    )
         
-        # Normalize weights
-        total = w_bm25 + w_sbert
-        if total > 0:
-            w_bm25 = w_bm25 / total
-            w_sbert = w_sbert / total
-    else:
-        w_bm25, w_sbert = 0.4, 0.6
-    
+    total = w_bm25 + w_sbert
+    if total > 0:
+        w_bm25 /= total
+        w_sbert /= total
+
+    #st.markdown("---")
+    #export_images = st.checkbox("Export Images", value=False)
+
     st.markdown("---")
-    
-    # Export Options
-    export_images = st.checkbox(
-        "Export Images",
-        value=False,
-        help="Save top results to outputs folder"
-    )
-    
-    st.markdown("---")
-    
-    # Stats
-    try:
-        memes, _ = load_data()
-        st.metric("Total Memes", len(memes))
-    except:
-        st.metric("Total Memes", "N/A")
+    st.metric("Total Memes", len(memes))
 
 # =========================
 # MAIN INTERFACE
 # =========================
 st.title("🎯 MemeMatcher")
-st.markdown("### Find the perfect meme template for any context")
 
-# Configuration Badge
 config_badge = f"🔍 **{mode}** | 📊 Top {top_k}"
 if mode == "Hybrid":
-    config_badge += f" | ⚖️ {w_bm25:.1f}/{w_sbert:.1f}"
+    config_badge += f" | ⚖️ {w_bm25:.2f}/{w_sbert:.2f}"
 st.markdown(config_badge)
-
 st.markdown("---")
 
-# Search Interface
+# Search box
 query_text = st.text_input(
     "Enter your search query",
-    placeholder="e.g., 'success', 'awkward moment', 'third world success kid'",
-    label_visibility="collapsed"
+    placeholder="e.g., 'success', 'awkward moment'",
+    label_visibility="collapsed",
+    key = "query_text",
+    on_change=do_search
 )
 
 col1, col2, col3 = st.columns([2, 1, 2])
 with col2:
-    search_button = st.button("🔍 Search Memes", width='stretch')
+    search_button = st.button("🔍 Search Memes", use_container_width=True, on_click=do_search)
 
 st.markdown("---")
 
 # =========================
 # QUERY EXECUTION & RESULTS
 # =========================
-if search_button:
+search_triggered = st.session_state.do_search 
+
+
+if search_triggered:
+    st.session_state.do_search = False
     if not query_text.strip():
         st.warning("⚠️ Please enter a search query")
     else:
         try:
-            
-            # Loading spinner with mode-specific message
-            spinner_messages = {
-                "bm25": "🔤 Searching BM25 index...",
-                "sbert": "🧠 Computing semantic embeddings...",
-                "hybrid": "⚡ Running hybrid search (BM25 + SBERT)..."
-            }
-            
-            with st.spinner(spinner_messages[mode_lower]):
-                # Normalize query
+            # No spinner needed
+            # spinner_messages = {
+            #     "bm25": "🔤 Searching BM25 index...",
+            #     "sbert": "🧠 Searching SBERT (FAISS)...",
+            #     "hybrid": "⚡ Running hybrid search (BM25 + SBERT via FAISS)..."
+            # }
+
+            # with st.spinner(spinner_messages[mode_lower]):
                 q_norm = normalize_text(query_text)
-                
+
                 bm25_scores = {}
                 sbert_scores = {}
                 sbert_by_id = {}
-                
-                # Retrieval
+
+                # --- Retrieval
                 if mode_lower in ("bm25", "hybrid"):
-                    bm25_raw = bm25_search(q_norm, BM25_INDEX_PATH, bm25_index)
-                    bm25_scores = normalize({
-                        r["meme_id"]: r["score"] for r in bm25_raw
-                    })
-                
+                    bm25_raw = bm25_search(q_norm, bm25_index)
+                    bm25_scores = normalize({r["meme_id"]: r["score"] for r in bm25_raw})
+
                 if mode_lower in ("sbert", "hybrid"):
-                    sbert_raw = sbert_search(query_text, SBERT_EMB_PATH, model, sbert_embeddings)
+                    sbert_raw = search_faiss_sbert(
+                        query_text,
+                        model=model,
+                        index_usage=index_usage,
+                        index_visual=index_visual,
+                        meme_ids=sbert_meme_ids
+                    )
                     sbert_by_id = {r["meme_id"]: r for r in sbert_raw}
-                    sbert_scores = normalize({
-                        r["meme_id"]: r["score"] for r in sbert_raw
-                    })
-                
-                # Fusion
+                    sbert_scores = normalize({r["meme_id"]: r["score"] for r in sbert_raw})
+
+                # --- Fusion ---
                 if mode_lower == "bm25":
                     final_scores = bm25_scores
                 elif mode_lower == "sbert":
                     final_scores = sbert_scores
                 else:
-                    final_scores = fuse(bm25_scores, sbert_scores, w_bm25, w_sbert)
-                
-                # Ranking
-                ranked = sorted(
-                    final_scores.items(),
-                    key=lambda x: x[1],
-                    reverse=True
-                )[:top_k]
-                
-                # Result shaping
+                    final_scores = fuse(bm25_scores, sbert_scores, w_bm25=w_bm25, w_sbert=w_sbert)
+
+                # --- Rank (cut only at end) ---
+                ranked = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+
+                # --- Shape results ---
                 topk = []
                 for meme_id, score in ranked:
                     winner_field = None
                     if sbert_by_id:
                         winner_field = sbert_by_id.get(meme_id, {}).get("winner_field")
-                    
+
                     topk.append({
                         "meme_id": meme_id,
                         "score": score,
                         "winner_field": winner_field
                     })
-                
+                st.session_state.last_topk = topk
+                st.session_state.last_query = query_text
+                st.session_state.has_results = True
+
+
                 # Export if enabled
-                if export_images and topk:
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    out_dir = os.path.join(OUTPUT_ROOT, f"run_{ts}")
-                    export(topk, memes_by_id, out_dir)
-                    st.success(f"✅ Images exported to `{out_dir}`")
-            
-            # Display Results
-            if not topk:
-                st.info("No results found. Try a different query.")
-            else:
-                st.markdown(f"### 🎯 Top {len(topk)} Results")
-                st.markdown(f"*Query: \"{query_text}\"*")
-                st.markdown("---")
-                
-                # Display in grid (2-3 per row based on count)
-                cols_per_row = 3 if len(topk) >= 3 else 2
-                
-                for i in range(0, len(topk), cols_per_row):
-                    cols = st.columns(cols_per_row)
-                    
-                    for j, col in enumerate(cols):
-                        if i + j < len(topk):
-                            result = topk[i + j]
-                            meme = memes_by_id[result["meme_id"]]
-                            
-                            with col:
-                                st.markdown(f"**#{i + j + 1}**")
-                                
-                                # Display image
-                                if meme.get("image_paths"):
-                                    img_path = meme["image_paths"][0]
-                                    if os.path.exists(img_path):
-                                        st.image(img_path, width='stretch')
-                                    else:
-                                        st.warning("Image not found")
-                                
-                                # Meme name
-                                st.markdown(f"**{meme['name']}**")
-                                
-                                # Score with progress bar
-                                st.progress(result["score"])
-                                st.caption(f"Score: {result['score']:.4f}")
-                                
-                                # Winner field badge (SBERT only)
-                                if result.get("winner_field"):
-                                    badge_class = "badge-usage" if result["winner_field"] == "usage" else "badge-visual"
-                                    st.markdown(
-                                        f'<span class="badge {badge_class}">{result["winner_field"]}</span>',
-                                        unsafe_allow_html=True
-                                    )
-                                
-                                # Use Context / Usage Text
-                                if meme.get("text", {}).get("usage_text"):
-                                    usage = meme["text"]["usage_text"]
-                                    if len(usage) > 200:
-                                        usage = usage[:200] + "..."
-                                    st.markdown(
-                                        f'<div class="usage-context"><strong>📋 Use Case:</strong><br>{usage}</div>',
-                                        unsafe_allow_html=True
-                                    )
-                                
-                                # Meme ID
-                                st.caption(f"`{result['meme_id']}`")
-        
+                # if export_images and topk:
+                #     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                #     out_dir = os.path.join(OUTPUT_ROOT, f"run_{ts}")
+                #     export(topk, memes_by_id, out_dir)
+                #     st.success(f"✅ Images exported to `{out_dir}`")
+
         except FileNotFoundError as e:
             st.error(f"❌ Missing file: {e}")
             st.info("💡 Run `python -m src.build` to create indexes first")
         except Exception as e:
             st.error(f"❌ Error: {e}")
             st.exception(e)
+            
+            
+# =========================
+# RENDER PERSISTED RESULTS
+# =========================
+topk = st.session_state.last_topk
+persisted_query = st.session_state.last_query
 
+if st.session_state.has_results:
+    if not topk:
+        st.info("No results found. Try a different query.")
+    else:
+        st.markdown(f"### 🎯 Top {len(topk)} Results")
+        st.markdown(f"*Query: \"{persisted_query}\"*")
+        st.markdown("---")
+
+        cols_per_row = 3 if len(topk) >= 3 else 2
+
+        for i in range(0, len(topk), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, col in enumerate(cols):
+                if i + j >= len(topk):
+                    continue
+
+                result = topk[i + j]
+                meme = memes_by_id[result["meme_id"]]
+
+                with col:
+                    st.markdown(f"**#{i + j + 1}**")
+
+                    if meme.get("image_paths"):
+                        img_path = meme["image_paths"][0]
+                        if os.path.exists(img_path):
+                            st.image(img_path, use_container_width=True)
+                        else:
+                            st.warning("Image not found")
+
+                    st.markdown(f"**{meme['name']}**")
+
+                    st.progress(float(result["score"]))
+                    st.caption(f"Score: {result['score']:.4f}")
+
+                    if result.get("winner_field"):
+                        badge_class = "badge-usage" if result["winner_field"] == "usage" else "badge-visual"
+                        st.markdown(
+                            f'<span class="badge {badge_class}">{result["winner_field"]}</span>',
+                            unsafe_allow_html=True
+                        )
+
+                    usage_full = meme.get("text", {}).get("usage_text", "")
+                    if usage_full:
+                        preview_len = 200
+                        is_long = len(usage_full) > preview_len
+                        usage_preview = usage_full[:preview_len] + "..." if is_long else usage_full
+
+                        st.markdown(
+                            f'<div class="usage-context"><strong>📋 Use Case:</strong><br>{html.escape(usage_preview)}</div>',
+                            unsafe_allow_html=True
+                        )
+                        if is_long:
+                            st.button(
+                                "Show more",
+                                key=f"more_{result['meme_id']}",
+                                on_click=show_full_usage,
+                                args=(meme["name"], usage_full)
+                            )
+
+                    st.caption(f"`{result['meme_id']}`")
 else:
-    # Empty state
     st.info("👆 Enter a query and click 'Search Memes' to begin")
     st.markdown("#### 💡 Example Queries")
     st.markdown("""
