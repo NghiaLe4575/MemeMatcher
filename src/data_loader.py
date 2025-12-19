@@ -9,7 +9,7 @@ def load_memes(path: str):
 
     for m in memes:
         meme_id = m.get("meme_id")
-        if not meme_id or not re.fullmatch(r"[a-z0-9_]+", meme_id):
+        if not meme_id: # or not re.fullmatch(r"[a-z0-9_-%]+", meme_id):
             raise ValueError(f"Invalid meme_id: {meme_id}")
 
         if meme_id in seen_ids:

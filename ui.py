@@ -242,7 +242,7 @@ with st.sidebar:
     is_hybrid = (mode == "Hybrid")
     w_bm25 = st.slider(
         "BM25 Weight",
-        0.0, 1.0, 1.0 - st.session_state.w_sbert,
+        0.0, 1.0,
         step=0.05,
         key="w_bm25",
         on_change=do_search,
@@ -251,7 +251,7 @@ with st.sidebar:
 
     w_sbert = st.slider(
         "SBERT Weight",
-        0.0, 1.0, 1.0 - st.session_state.w_bm25,
+        0.0, 1.0,
         step=0.05,
         key="w_sbert",
         on_change=do_search,
