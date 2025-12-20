@@ -5,6 +5,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 from src.data_loader import load_memes
 from src.bm25_indexer import build_corpus, build_index
 from src.sbert_indexer import build_sbert_faiss
+from src.clip_indexer import build_clip_faiss
 
 # =========================
 # CONFIG
@@ -14,7 +15,6 @@ ARTIFACTS_DIR = "artifacts"
 
 BM25_CORPUS_PATH = f"{ARTIFACTS_DIR}/bm25_corpus.json"
 BM25_INDEX_PATH  = f"{ARTIFACTS_DIR}/bm25_index.pkl"
-# SBERT+FAISS outputs are written into ARTIFACTS_DIR
 # =========================
 
 def main():
@@ -31,6 +31,9 @@ def main():
 
     print("Building SBERT embeddings + FAISS indices...")
     build_sbert_faiss(memes, ARTIFACTS_DIR)
+
+    print("Building CLIP image embeddings + FAISS index...")
+    build_clip_faiss(memes, ARTIFACTS_DIR)
 
     print("Build complete.")
     print("Artifacts written to:", ARTIFACTS_DIR)

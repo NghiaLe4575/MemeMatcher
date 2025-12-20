@@ -16,6 +16,11 @@ from src.retrieval_sbert import search_faiss_sbert
 from src.fusion import normalize, fuse
 from src.export_images import export
 import html
+from PIL import Image
+import torch
+from transformers import CLIPModel, CLIPProcessor
+from src.retrieval_clip import search_faiss_clip_image
+
 
 # =========================
 # CONFIG
@@ -31,6 +36,11 @@ SBERT_MEME_IDS_PATH     = f"{ARTIFACTS_DIR}/sbert_meme_ids.json"
 
 OUTPUT_ROOT = "outputs"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+CLIP_INDEX_PATH   = f"{ARTIFACTS_DIR}/clip_images.index"
+CLIP_MEME_IDS_PATH= f"{ARTIFACTS_DIR}/clip_meme_ids.json"
+CLIP_MODEL_NAME   = "openai/clip-vit-base-patch32"
+
 # =========================
 
 # =========================
@@ -157,10 +167,6 @@ def load_data():
     return memes, memes_by_id
 
 @st.cache_resource
-def get_sbert_model():
-    return SentenceTransformer(MODEL_NAME)
-
-@st.cache_resource
 def load_bm25_index():
     with open(BM25_INDEX_PATH, "rb") as f:
         return pickle.load(f)
@@ -173,18 +179,39 @@ def load_faiss_indices():
         meme_ids = json.load(f)
     return idx_usage, idx_visual, meme_ids
 
+@st.cache_resource
+def load_clip_index():
+    idx = faiss.read_index(CLIP_INDEX_PATH)
+    with open(CLIP_MEME_IDS_PATH, "r", encoding="utf-8") as f:
+        meme_ids = json.load(f)
+    return idx, meme_ids
+
+@st.cache_resource
+def get_sbert_model():
+    return SentenceTransformer(MODEL_NAME)
+
+@st.cache_resource
+def get_clip_model_and_processor():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(device)
+    processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
+    model.eval()
+    return model, processor, device
+
 # Force-load at app startup (first render)
 model = get_sbert_model()
 memes, memes_by_id = load_data()
 bm25_index = load_bm25_index()
 index_usage, index_visual, sbert_meme_ids = load_faiss_indices()
+clip_model, clip_processor, clip_device = get_clip_model_and_processor()
+clip_index, clip_meme_ids = load_clip_index()
 
 # Global search state and variables
 if "do_search" not in st.session_state:
     st.session_state.do_search = False
     
 def do_search():
-    if st.session_state.get("query_text", "").strip():
+    #if st.session_state.get("query_text", "").strip():
         st.session_state.do_search = True
         
 if "w_bm25" not in st.session_state:
@@ -194,10 +221,20 @@ if "w_sbert" not in st.session_state:
     
 if "last_topk" not in st.session_state:
     st.session_state.last_topk = []
-if "last_query" not in st.session_state:
-    st.session_state.last_query = ""
 if "has_results" not in st.session_state:
     st.session_state.has_results = False
+    
+def no_results():
+    st.session_state.has_results = False
+    
+if "last_query_text" not in st.session_state:
+    st.session_state.last_query_text = ""
+
+if "last_query_image" not in st.session_state:
+    st.session_state.last_query_image = None
+
+if "last_mode" not in st.session_state:
+    st.session_state.last_mode = None
 
     
 # =========================
@@ -217,13 +254,15 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("**Retrieval Mode**")
+    
     mode = st.radio(
         "Select search algorithm",
-        ["BM25", "SBERT", "Hybrid"],
-        help="BM25: Keyword-based | SBERT: Semantic | Hybrid: Combined",
+        ["BM25", "SBERT", "Hybrid", "CLIP (Image)"],
+        help="BM25: Keyword | SBERT: Semantic | Hybrid: Combined | CLIP: Image-to-image",
         label_visibility="collapsed",
-        on_change=do_search
+        on_change=no_results
     )
+
     mode_lower = mode.lower()
 
     st.markdown("---")
@@ -280,14 +319,37 @@ if mode == "Hybrid":
 st.markdown(config_badge)
 st.markdown("---")
 
-# Search box
-query_text = st.text_input(
-    "Enter your search query",
-    placeholder="e.g., 'success', 'awkward moment'",
-    label_visibility="collapsed",
-    key = "query_text",
-    on_change=do_search
-)
+
+# CLIP interface
+query_image = None
+
+query_image = None
+query_text = ""
+
+if mode == "CLIP (Image)":
+    uploaded = st.file_uploader(
+        "Upload an image to search similar memes",
+        type=["png", "jpg", "jpeg", "webp"],
+        on_change=do_search
+    )
+
+    if uploaded is not None:
+        query_image = Image.open(uploaded).convert("RGB")
+        st.image(query_image, caption="Query image", use_container_width=True)
+    elif st.session_state.last_mode == "CLIP (Image)" and st.session_state.last_query_image is not None:
+        query_image = st.session_state.last_query_image
+        st.image(query_image, caption="Last query image", use_container_width=True)
+
+else:
+    query_text = st.text_input(
+        "Enter your search query",
+        placeholder="e.g., 'success', 'awkward moment'",
+        value=st.session_state.last_query_text if st.session_state.last_mode != "CLIP (Image)" else "",
+        label_visibility="collapsed",
+        key="query_text",
+        on_change=do_search
+    )
+
 
 col1, col2, col3 = st.columns([2, 1, 2])
 with col2:
@@ -303,95 +365,127 @@ search_triggered = st.session_state.do_search
 
 if search_triggered:
     st.session_state.do_search = False
-    if not query_text.strip():
-        st.warning("⚠️ Please enter a search query")
+    if mode == "CLIP (Image)":
+        if query_image is None:
+            st.warning("⚠️ Please upload an image")
+            st.stop()
     else:
-        try:
-            # No spinner needed
-            # spinner_messages = {
-            #     "bm25": "🔤 Searching BM25 index...",
-            #     "sbert": "🧠 Searching SBERT (FAISS)...",
-            #     "hybrid": "⚡ Running hybrid search (BM25 + SBERT via FAISS)..."
-            # }
+        if not query_text.strip():
+            st.warning("⚠️ Please enter a search query")
+            st.stop()
 
-            # with st.spinner(spinner_messages[mode_lower]):
+    try:
+        # No spinner needed
+        # spinner_messages = {
+        #     "bm25": "🔤 Searching BM25 index...",
+        #     "sbert": "🧠 Searching SBERT (FAISS)...",
+        #     "hybrid": "⚡ Running hybrid search (BM25 + SBERT via FAISS)..."
+        # }
+
+        # with st.spinner(spinner_messages[mode_lower]):
+            if mode != "CLIP (Image)":
                 q_norm = normalize_text(query_text)
 
-                bm25_scores = {}
-                sbert_scores = {}
-                sbert_by_id = {}
 
-                # --- Retrieval
-                if mode_lower in ("bm25", "hybrid"):
-                    bm25_raw = bm25_search(q_norm, bm25_index)
-                    bm25_scores = normalize({r["meme_id"]: r["score"] for r in bm25_raw})
+            bm25_scores = {}
+            sbert_scores = {}
+            sbert_by_id = {}
 
-                if mode_lower in ("sbert", "hybrid"):
-                    sbert_raw = search_faiss_sbert(
-                        query_text,
-                        model=model,
-                        index_usage=index_usage,
-                        index_visual=index_visual,
-                        meme_ids=sbert_meme_ids
-                    )
-                    sbert_by_id = {r["meme_id"]: r for r in sbert_raw}
-                    sbert_scores = normalize({r["meme_id"]: r["score"] for r in sbert_raw})
+            # --- Retrieval
+            if mode_lower in ("bm25", "hybrid"):
+                bm25_raw = bm25_search(q_norm, bm25_index)
+                bm25_scores = normalize({r["meme_id"]: r["score"] for r in bm25_raw})
 
-                # --- Fusion ---
-                if mode_lower == "bm25":
-                    final_scores = bm25_scores
-                elif mode_lower == "sbert":
-                    final_scores = sbert_scores
-                else:
-                    final_scores = fuse(bm25_scores, sbert_scores, w_bm25=w_bm25, w_sbert=w_sbert)
+            if mode_lower in ("sbert", "hybrid"):
+                sbert_raw = search_faiss_sbert(
+                    query_text,
+                    model=model,
+                    index_usage=index_usage,
+                    index_visual=index_visual,
+                    meme_ids=sbert_meme_ids
+                )
+                sbert_by_id = {r["meme_id"]: r for r in sbert_raw}
+                sbert_scores = normalize({r["meme_id"]: r["score"] for r in sbert_raw})
+            if mode == "CLIP (Image)":
+                clip_raw = search_faiss_clip_image(
+                    query_pil_image=query_image,
+                    model=clip_model,
+                    processor=clip_processor,
+                    index=clip_index,
+                    meme_ids=clip_meme_ids,
+                    top_n=100,
+                    device=clip_device
+                )
+                # normalize to 0..1 
+                clip_scores = normalize({r["meme_id"]: r["score"] for r in clip_raw})
 
-                # --- Rank (cut only at end) ---
-                ranked = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+            # --- Fusion ---
+            if mode_lower == "bm25":
+                final_scores = bm25_scores
+            elif mode_lower == "sbert":
+                final_scores = sbert_scores
+            elif mode == "CLIP (Image)":
+                final_scores = clip_scores
+            else:
+                final_scores = fuse(bm25_scores, sbert_scores, w_bm25=w_bm25, w_sbert=w_sbert)
 
-                # --- Shape results ---
-                topk = []
-                for meme_id, score in ranked:
-                    winner_field = None
-                    if sbert_by_id:
-                        winner_field = sbert_by_id.get(meme_id, {}).get("winner_field")
+            # --- Rank (cut only at end) ---
+            ranked = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
-                    topk.append({
-                        "meme_id": meme_id,
-                        "score": score,
-                        "winner_field": winner_field
-                    })
-                st.session_state.last_topk = topk
-                st.session_state.last_query = query_text
-                st.session_state.has_results = True
+            # --- Shape results ---
+            topk = []
+            for meme_id, score in ranked:
+                winner_field = None
+                if sbert_by_id:
+                    winner_field = sbert_by_id.get(meme_id, {}).get("winner_field")
+
+                topk.append({
+                    "meme_id": meme_id,
+                    "score": score,
+                    "winner_field": winner_field
+                })
+            st.session_state.last_topk = topk
+            st.session_state.has_results = True
+            st.session_state.last_mode = mode
+            if mode == "CLIP (Image)":
+                st.session_state.last_query_image = query_image
+                st.session_state.last_query_text = ""
+            else:
+                st.session_state.last_query_text = query_text
+                st.session_state.last_query_image = None
 
 
-                # Export if enabled
-                # if export_images and topk:
-                #     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                #     out_dir = os.path.join(OUTPUT_ROOT, f"run_{ts}")
-                #     export(topk, memes_by_id, out_dir)
-                #     st.success(f"✅ Images exported to `{out_dir}`")
 
-        except FileNotFoundError as e:
-            st.error(f"❌ Missing file: {e}")
-            st.info("💡 Run `python -m src.build` to create indexes first")
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
-            st.exception(e)
-            
-            
+            # Export if enabled
+            # if export_images and topk:
+            #     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            #     out_dir = os.path.join(OUTPUT_ROOT, f"run_{ts}")
+            #     export(topk, memes_by_id, out_dir)
+            #     st.success(f"✅ Images exported to `{out_dir}`")
+
+    except FileNotFoundError as e:
+        st.error(f"❌ Missing file: {e}")
+        st.info("💡 Run `python -m src.build` to create indexes first")
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
+        st.exception(e)
+        
+        
 # =========================
 # RENDER PERSISTED RESULTS
 # =========================
 topk = st.session_state.last_topk
-persisted_query = st.session_state.last_query
 
 if st.session_state.has_results:
     if not topk:
         st.info("No results found. Try a different query.")
     else:
         st.markdown(f"### 🎯 Top {len(topk)} Results")
-        st.markdown(f"*Query: \"{persisted_query}\"*")
+        if st.session_state.last_mode == "CLIP (Image)":
+            st.markdown("*Query: image-based search*")
+        else:
+            st.markdown(f"*Query: \"{st.session_state.last_query_text}\"*")
+
         st.markdown("---")
 
         cols_per_row = 3 if len(topk) >= 3 else 2
