@@ -1,552 +1,161 @@
+"""MemeMatcher - Meme Retrieval System with BM25, SBERT, and CLIP"""
 import streamlit as st
-import os
-import pickle
-import json
 import warnings
-import html
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-import faiss
-from sentence_transformers import SentenceTransformer
+# Import components
+from components.loaders import (
+    load_data,
+    load_bm25_index,
+    load_faiss_indices,
+    load_clip_index,
+    get_sbert_model,
+    get_clip_model_and_processor
+)
+from components.state import initialize_state, add_to_search_history
+from components.styles import inject_styles
+from components.ui_config_bar import render_config_bar
+from components.ui_query_input import render_query_input
+from components.ui_results import render_results, render_empty_state
+from components.search_engine import execute_search
 
-from src.data_loader import load_memes
-from src.normalize import normalize_text
-from src.retrieval_bm25 import search as bm25_search
-from src.retrieval_sbert import search_faiss_sbert
-from src.fusion import normalize, fuse
-from src.export_images import export
-import html
-from PIL import Image
-import torch
-from transformers import CLIPModel, CLIPProcessor
-from src.retrieval_clip import search_faiss_clip_image
-
-
-# =========================
-# CONFIG
-# =========================
-DATA_PATH = "data/memes.json"
-ARTIFACTS_DIR = "artifacts"
-
-BM25_INDEX_PATH = f"{ARTIFACTS_DIR}/bm25_index.pkl"
-
-SBERT_USAGE_INDEX_PATH  = f"{ARTIFACTS_DIR}/sbert_usage.index"
-SBERT_VISUAL_INDEX_PATH = f"{ARTIFACTS_DIR}/sbert_visual.index"
-SBERT_MEME_IDS_PATH     = f"{ARTIFACTS_DIR}/sbert_meme_ids.json"
-
-OUTPUT_ROOT = "outputs"
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-
-CLIP_INDEX_PATH   = f"{ARTIFACTS_DIR}/clip_images.index"
-CLIP_MEME_IDS_PATH= f"{ARTIFACTS_DIR}/clip_meme_ids.json"
-CLIP_MODEL_NAME   = "openai/clip-vit-base-patch32"
-
-# =========================
 
 # =========================
 # PAGE CONFIG
 # =========================
 st.set_page_config(
     page_title="MemeMatcher | Meme Retrieval System",
-    page_icon="🎯",
+    page_icon=":mag:",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# =========================
-# CUSTOM CSS - MODERN WHITE THEME
-# =========================
-st.markdown("""
-    <style>
-        /* Global font and background */
-        html, body, [class*="css"] {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background-color: #FFFFFF;
-            color: #132338;
-        }
-
-        /* Smooth rounded corners */
-        .stTextInput input, .stSelectbox div, .stButton button, .stSlider {
-            border-radius: 10px !important;
-            transition: all 0.3s ease;
-        }
-
-        /* Modern button styling */
-        .stButton button {
-            background: linear-gradient(135deg, #475C78 0%, #8D7D5F 100%);
-            color: #E2D2B3;
-            font-weight: 700;
-            border: none;
-            box-shadow: 0 6px 14px rgba(19, 35, 56, 0.25);
-            padding: 0.85rem 2.5rem;
-            font-size: 1rem;
-        }
-        .stButton button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 18px rgba(19, 35, 56, 0.3);
-            background: linear-gradient(135deg, #132338 0%, #475C78 100%);
-        }
-
-        /* Config panel cards */
-        .config-card {
-            background: #F5F0E6;
-            border: 2px solid #E2D2B3;
-            border-radius: 12px;
-            padding: 1rem 1.25rem;
-            box-shadow: 0 2px 8px rgba(19, 35, 56, 0.08);
-        }
-
-        /* Header styling */
-        h1 { color: #132338; font-weight: 800; letter-spacing: -1px; }
-        h2, h3 { color: #475C78; font-weight: 700; }
-
-        /* Card styling for results */
-        .meme-card {
-            background: white;
-            border-radius: 12px;
-            padding: 1.5rem;
-            box-shadow: 0 2px 10px rgba(19, 35, 56, 0.12);
-            transition: all 0.3s ease;
-            border: 2px solid #9AA7B8;
-        }
-        .meme-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 20px rgba(19, 35, 56, 0.18);
-            border-color: #FFA600;
-        }
-
-        /* Badge styling */
-        .badge {
-            display: inline-block;
-            padding: 0.35rem 0.85rem;
-            border-radius: 12px;
-            font-size: 0.85rem;
-            font-weight: 700;
-            margin: 0.25rem;
-        }
-        .badge-usage { background-color: #9AA7B8; color: #132338; }
-        .badge-visual { background-color: #E2D2B3; color: #475C78; }
-
-        /* Context/usage text styling */
-        .usage-context {
-            background-color: #F5F0E6;
-            border-left: 4px solid #FFA600;
-            padding: 0.75rem;
-            border-radius: 8px;
-            font-size: 0.95rem;
-            color: #475C78;
-            margin: 0.75rem 0;
-            line-height: 1.5;
-        }
-
-        /* Input styling */
-        .stTextInput input {
-            border: 2px solid #9AA7B8;
-            font-size: 1.1rem;
-            padding: 0.85rem;
-            color: #132338;
-        }
-        .stTextInput input:focus {
-            border-color: #FFA600;
-            box-shadow: 0 0 0 3px rgba(255, 166, 0, 0.18);
-        }
-
-        /* Hide Streamlit branding */
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-    </style>
-""", unsafe_allow_html=True)
 
 # =========================
-# LOAD DATA / MODELS / INDICES (CACHED, LOADED ONCE)
+# INITIALIZATION
 # =========================
-@st.cache_data
-def load_data():
-    memes = load_memes(DATA_PATH)
-    memes_by_id = {m["meme_id"]: m for m in memes}
-    return memes, memes_by_id
+# Initialize session state
+initialize_state()
 
-@st.cache_resource
-def load_bm25_index():
-    with open(BM25_INDEX_PATH, "rb") as f:
-        return pickle.load(f)
+# Inject custom styles
+inject_styles()
 
-@st.cache_resource
-def load_faiss_indices():
-    idx_usage = faiss.read_index(SBERT_USAGE_INDEX_PATH)
-    idx_visual = faiss.read_index(SBERT_VISUAL_INDEX_PATH)
-    with open(SBERT_MEME_IDS_PATH, "r", encoding="utf-8") as f:
-        meme_ids = json.load(f)
-    return idx_usage, idx_visual, meme_ids
-
-@st.cache_resource
-def load_clip_index():
-    idx = faiss.read_index(CLIP_INDEX_PATH)
-    with open(CLIP_MEME_IDS_PATH, "r", encoding="utf-8") as f:
-        meme_ids = json.load(f)
-    return idx, meme_ids
-
-@st.cache_resource
-def get_sbert_model():
-    return SentenceTransformer(MODEL_NAME)
-
-@st.cache_resource
-def get_clip_model_and_processor():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(device)
-    processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
-    model.eval()
-    return model, processor, device
-
-# Force-load at app startup (first render)
-model = get_sbert_model()
+# Load lightweight resources immediately (fast - just JSON/pickle files)
 memes, memes_by_id = load_data()
 bm25_index = load_bm25_index()
 index_usage, index_visual, sbert_meme_ids = load_faiss_indices()
-clip_model, clip_processor, clip_device = get_clip_model_and_processor()
 clip_index, clip_meme_ids = load_clip_index()
 
-# Global search state and variables
-if "do_search" not in st.session_state:
-    st.session_state.do_search = False
-    
-def do_search():
-    #if st.session_state.get("query_text", "").strip():
-        st.session_state.do_search = True
-        
-if "w_bm25" not in st.session_state:
-    st.session_state.w_bm25 = 0.4
-if "w_sbert" not in st.session_state:
-    st.session_state.w_sbert = 0.6
-    
-if "last_topk" not in st.session_state:
-    st.session_state.last_topk = []
-if "has_results" not in st.session_state:
-    st.session_state.has_results = False
-    
-def no_results():
-    st.session_state.has_results = False
-    
-if "last_query_text" not in st.session_state:
-    st.session_state.last_query_text = ""
-
-if "last_query_image" not in st.session_state:
-    st.session_state.last_query_image = None
-
-if "last_mode" not in st.session_state:
-    st.session_state.last_mode = None
-
-    
-# =========================
-# Helper
-# =========================
-@st.dialog("Detail")
-def show_full_usage(title: str, text: str):
-    st.markdown(f"**{title}**")
-    st.write(text)
+# NOTE: SBERT and CLIP models are loaded LAZILY (only when needed for search)
+# This dramatically speeds up initial page load
 
 
 # =========================
-# SIDEBAR - CONFIGURATION
+# MAIN UI
 # =========================
-with st.sidebar:
-    st.markdown("### ⚙️ Configuration")
-    st.markdown("---")
-
-    st.markdown("**Retrieval Mode**")
-    
-    mode = st.radio(
-        "Select search algorithm",
-        ["BM25", "SBERT", "Hybrid", "CLIP (Image)"],
-        help="BM25: Keyword | SBERT: Semantic | Hybrid: Combined | CLIP: Image-to-image",
-        label_visibility="collapsed",
-        on_change=no_results
-    )
-
-    mode_lower = mode.lower()
-
-    st.markdown("---")
-
-    top_k = st.slider(
-        "Number of Results",
-        min_value=1,
-        max_value=20,
-        value=5,
-        on_change=do_search
-    )
-
-    st.markdown("---")
-    st.markdown("**Fusion Weights**")
-    # ALWAYS render sliders so state persists; just disable unless Hybrid
-    is_hybrid = (mode == "Hybrid")
-    w_bm25 = st.slider(
-        "BM25 Weight",
-        0.0, 1.0,
-        step=0.05,
-        key="w_bm25",
-        on_change=do_search,
-        disabled=not is_hybrid
-    )
-
-    w_sbert = st.slider(
-        "SBERT Weight",
-        0.0, 1.0,
-        step=0.05,
-        key="w_sbert",
-        on_change=do_search,
-        disabled=not is_hybrid
-    )
-        
-    total = w_bm25 + w_sbert
-    if total > 0:
-        w_bm25 /= total
-        w_sbert /= total
-
-    #st.markdown("---")
-    #export_images = st.checkbox("Export Images", value=False)
-
-    st.markdown("---")
-    st.metric("Total Memes", len(memes))
-
-# =========================
-# MAIN INTERFACE
-# =========================
-st.title("🎯 MemeMatcher")
-
-config_badge = f"🔍 **{mode}** | 📊 Top {top_k}"
-if mode == "Hybrid":
-    config_badge += f" | ⚖️ {w_bm25:.2f}/{w_sbert:.2f}"
-st.markdown(config_badge)
+st.title("MemeMatcher")
+st.markdown("*Advanced meme search with BM25, SBERT, and CLIP*")
 st.markdown("---")
 
+# Configuration bar (horizontal)
+config = render_config_bar(len(memes))
+mode = config["mode"]
+top_k = config["top_k"]
+w_bm25 = config["w_bm25"]
+w_sbert = config["w_sbert"]
 
-# CLIP interface
-query_image = None
+# Query input
+query_text, query_image, search_clicked = render_query_input(mode)
 
-query_image = None
-query_text = ""
+# If history was selected, use that query text and trigger search
+if st.session_state.get("selected_history_query"):
+    query_text = st.session_state.selected_history_query
+    st.session_state.selected_history_query = None  # Clear after use
 
-if mode == "CLIP (Image)":
-    uploaded = st.file_uploader(
-        "Upload an image to search similar memes",
-        type=["png", "jpg", "jpeg", "webp"],
-        on_change=do_search
-    )
-
-    if uploaded is not None:
-        query_image = Image.open(uploaded).convert("RGB")
-        st.image(query_image, caption="Query image", use_container_width=True)
-    elif st.session_state.last_mode == "CLIP (Image)" and st.session_state.last_query_image is not None:
-        query_image = st.session_state.last_query_image
-        st.image(query_image, caption="Last query image", use_container_width=True)
-
-else:
-    query_text = st.text_input(
-        "Enter your search query",
-        placeholder="e.g., 'success', 'awkward moment'",
-        value=st.session_state.last_query_text if st.session_state.last_mode != "CLIP (Image)" else "",
-        label_visibility="collapsed",
-        key="query_text",
-        on_change=do_search
-    )
-
-
-col1, col2, col3 = st.columns([2, 1, 2])
-with col2:
-    search_button = st.button("🔍 Search Memes", use_container_width=True, on_click=do_search)
-
-st.markdown("---")
 
 # =========================
-# QUERY EXECUTION & RESULTS
+# SEARCH EXECUTION
 # =========================
-search_triggered = st.session_state.do_search 
-
+search_triggered = st.session_state.do_search
 
 if search_triggered:
     st.session_state.do_search = False
+    
+    # Validate input
     if mode == "CLIP (Image)":
         if query_image is None:
-            st.warning("⚠️ Please upload an image")
+            st.warning("Please upload an image")
             st.stop()
     else:
         if not query_text.strip():
-            st.warning("⚠️ Please enter a search query")
+            st.warning("Please enter a search query")
             st.stop()
-
+    
     try:
-        # No spinner needed
-        # spinner_messages = {
-        #     "bm25": "🔤 Searching BM25 index...",
-        #     "sbert": "🧠 Searching SBERT (FAISS)...",
-        #     "hybrid": "⚡ Running hybrid search (BM25 + SBERT via FAISS)..."
-        # }
-
-        # with st.spinner(spinner_messages[mode_lower]):
-            if mode != "CLIP (Image)":
-                q_norm = normalize_text(query_text)
-
-
-            bm25_scores = {}
-            sbert_scores = {}
-            sbert_by_id = {}
-
-            # --- Retrieval
-            if mode_lower in ("bm25", "hybrid"):
-                bm25_raw = bm25_search(q_norm, bm25_index)
-                bm25_scores = normalize({r["meme_id"]: r["score"] for r in bm25_raw})
-
-            if mode_lower in ("sbert", "hybrid"):
-                sbert_raw = search_faiss_sbert(
-                    query_text,
-                    model=model,
-                    index_usage=index_usage,
-                    index_visual=index_visual,
-                    meme_ids=sbert_meme_ids
-                )
-                sbert_by_id = {r["meme_id"]: r for r in sbert_raw}
-                sbert_scores = normalize({r["meme_id"]: r["score"] for r in sbert_raw})
-            if mode == "CLIP (Image)":
-                clip_raw = search_faiss_clip_image(
-                    query_pil_image=query_image,
-                    model=clip_model,
-                    processor=clip_processor,
-                    index=clip_index,
-                    meme_ids=clip_meme_ids,
-                    top_n=100,
-                    device=clip_device
-                )
-                # normalize to 0..1 
-                clip_scores = normalize({r["meme_id"]: r["score"] for r in clip_raw})
-
-            # --- Fusion ---
-            if mode_lower == "bm25":
-                final_scores = bm25_scores
-            elif mode_lower == "sbert":
-                final_scores = sbert_scores
-            elif mode == "CLIP (Image)":
-                final_scores = clip_scores
-            else:
-                final_scores = fuse(bm25_scores, sbert_scores, w_bm25=w_bm25, w_sbert=w_sbert)
-
-            # --- Rank (cut only at end) ---
-            ranked = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-
-            # --- Shape results ---
-            topk = []
-            for meme_id, score in ranked:
-                winner_field = None
-                if sbert_by_id:
-                    winner_field = sbert_by_id.get(meme_id, {}).get("winner_field")
-
-                topk.append({
-                    "meme_id": meme_id,
-                    "score": score,
-                    "winner_field": winner_field
-                })
-            st.session_state.last_topk = topk
-            st.session_state.has_results = True
-            st.session_state.last_mode = mode
-            if mode == "CLIP (Image)":
-                st.session_state.last_query_image = query_image
-                st.session_state.last_query_text = ""
-            else:
-                st.session_state.last_query_text = query_text
-                st.session_state.last_query_image = None
-
-
-
-            # Export if enabled
-            # if export_images and topk:
-            #     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            #     out_dir = os.path.join(OUTPUT_ROOT, f"run_{ts}")
-            #     export(topk, memes_by_id, out_dir)
-            #     st.success(f"✅ Images exported to `{out_dir}`")
-
-    except FileNotFoundError as e:
-        st.error(f"❌ Missing file: {e}")
-        st.info("💡 Run `python -m src.build` to create indexes first")
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
-        st.exception(e)
+        # Load models LAZILY based on search mode (only load what's needed)
+        sbert_model = None
+        clip_model = None
+        clip_processor = None
+        clip_device = None
         
+        if mode in ["SBERT", "Hybrid"]:
+            sbert_model = get_sbert_model()
         
-# =========================
-# RENDER PERSISTED RESULTS
-# =========================
-topk = st.session_state.last_topk
-
-if st.session_state.has_results:
-    if not topk:
-        st.info("No results found. Try a different query.")
-    else:
-        st.markdown(f"### 🎯 Top {len(topk)} Results")
-        if st.session_state.last_mode == "CLIP (Image)":
-            st.markdown("*Query: image-based search*")
+        if mode == "CLIP (Image)":
+            clip_model, clip_processor, clip_device = get_clip_model_and_processor()
+        
+        # Execute search
+        results = execute_search(
+            mode=mode,
+            query_text=query_text,
+            query_image=query_image,
+            top_k=top_k,
+            w_bm25=w_bm25,
+            w_sbert=w_sbert,
+            bm25_index=bm25_index,
+            sbert_model=sbert_model,
+            index_usage=index_usage,
+            index_visual=index_visual,
+            sbert_meme_ids=sbert_meme_ids,
+            clip_model=clip_model,
+            clip_processor=clip_processor,
+            clip_index=clip_index,
+            clip_meme_ids=clip_meme_ids,
+            clip_device=clip_device
+        )
+        
+        # Update state
+        st.session_state.last_topk = results
+        st.session_state.has_results = True
+        st.session_state.last_mode = mode
+        
+        if mode == "CLIP (Image)":
+            st.session_state.last_query_image = query_image
+            st.session_state.last_query_text = ""
         else:
-            st.markdown(f"*Query: \"{st.session_state.last_query_text}\"*")
+            st.session_state.last_query_text = query_text
+            st.session_state.last_query_image = None
+            add_to_search_history(query_text, mode)
+    
+    except FileNotFoundError as e:
+        st.error(f"Missing file: {e}")
+        st.info("Run `python -m src.build` to create indexes first")
+    except Exception as e:
+        st.error(f"Error: {e}")
+        st.exception(e)
 
-        st.markdown("---")
 
-        cols_per_row = 3 if len(topk) >= 3 else 2
-
-        for i in range(0, len(topk), cols_per_row):
-            cols = st.columns(cols_per_row)
-            for j, col in enumerate(cols):
-                if i + j >= len(topk):
-                    continue
-
-                result = topk[i + j]
-                meme = memes_by_id[result["meme_id"]]
-
-                with col:
-                    st.markdown(f"**#{i + j + 1}**")
-
-                    if meme.get("image_paths"):
-                        img_path = meme["image_paths"][0]
-                        if os.path.exists(img_path):
-                            st.image(img_path, use_container_width=True)
-                        else:
-                            st.warning("Image not found")
-
-                    st.markdown(f"**{meme['name']}**")
-
-                    st.progress(float(result["score"]))
-                    st.caption(f"Score: {result['score']:.4f}")
-
-                    if result.get("winner_field"):
-                        badge_class = "badge-usage" if result["winner_field"] == "usage" else "badge-visual"
-                        st.markdown(
-                            f'<span class="badge {badge_class}">{result["winner_field"]}</span>',
-                            unsafe_allow_html=True
-                        )
-
-                    usage_full = meme.get("text", {}).get("usage_text", "")
-                    if usage_full:
-                        preview_len = 200
-                        is_long = len(usage_full) > preview_len
-                        usage_preview = usage_full[:preview_len] + "..." if is_long else usage_full
-
-                        st.markdown(
-                            f'<div class="usage-context"><strong>📋 Use Case:</strong><br>{html.escape(usage_preview)}</div>',
-                            unsafe_allow_html=True
-                        )
-                        if is_long:
-                            st.button(
-                                "Show more",
-                                key=f"more_{result['meme_id']}",
-                                on_click=show_full_usage,
-                                args=(meme["name"], usage_full)
-                            )
-
-                    st.caption(f"`{result['meme_id']}`")
+# =========================
+# RENDER RESULTS
+# =========================
+if st.session_state.has_results:
+    render_results(
+        results=st.session_state.last_topk,
+        memes_by_id=memes_by_id,
+        query_text=st.session_state.last_query_text,
+        query_image=st.session_state.last_query_image,
+        mode=st.session_state.last_mode
+    )
 else:
-    st.info("👆 Enter a query and click 'Search Memes' to begin")
-    st.markdown("#### 💡 Example Queries")
-    st.markdown("""
-    - `success kid`
-    - `awkward moment`
-    - `feeling proud but poor`
-    - `drake approve disapprove`
-    - `distracted boyfriend`
-    """)
+    render_empty_state()
+
